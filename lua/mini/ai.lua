@@ -554,6 +554,8 @@ MiniAi.config = {
   search_method = 'cover_or_next',
 
   -- Whether to disable showing non-error feedback
+  -- This also affects (purely informational) helper messages shown after
+  -- idle time if user input is required.
   silent = false,
 }
 --minidoc_afterlines_end
@@ -1017,9 +1019,9 @@ MiniAi.select_textobject = function(ai_type, id, opts)
     vis_mode = opts.vis_mode and vim.api.nvim_replace_termcodes(opts.vis_mode, true, true, true) or prev_vis_mode
   end
 
-  -- Allow going past end of line in order to collapse multiline regions
-  local cache_virtualedit = vim.o.virtualedit
   local cache_eventignore = vim.o.eventignore
+  -- Allow going past end of line in order to collapse multiline regions
+  local cache_virtualedit, cache_whichwrap = vim.o.virtualedit, vim.o.whichwrap
 
   pcall(function()
     -- Do nothing in Operator-pending mode for empty region (except `c`, `d`,
@@ -1035,6 +1037,11 @@ MiniAi.select_textobject = function(ai_type, id, opts)
     end
 
     -- Allow setting cursor past line end (allows collapsing multiline region)
+    -- NOTE: This doesn't work for 'virtualedit=all' and 'selection=inclusive'
+    -- (default). The reason is that later option restoring is done immediately
+    -- leading to a selection obey 'virtualedit=all' rules and thus won't treat
+    -- end-of-line as '\n' and collapse multiline region. The solution is to
+    -- `vim.schedule()` option restore, but it feels too much for a niche case.
     vim.o.virtualedit = 'onemore'
 
     -- Open enough folds to show left and right edges
@@ -1043,8 +1050,8 @@ MiniAi.select_textobject = function(ai_type, id, opts)
     set_cursor(tobj.to)
     vim.cmd('normal! zv')
 
-    -- Respect exclusive selection
-    if vim.o.selection == 'exclusive' then vim.cmd('normal! l') end
+    -- Respect exclusive selection (including when selecting end of line)
+    if vim.o.selection == 'exclusive' then vim.cmd('set whichwrap=l | normal! l') end
 
     -- Start selection
     vim.cmd('normal! ' .. vis_mode)
@@ -1062,8 +1069,8 @@ MiniAi.select_textobject = function(ai_type, id, opts)
   end)
 
   -- Restore options
-  vim.o.virtualedit = cache_virtualedit
   vim.o.eventignore = cache_eventignore
+  vim.o.virtualedit, vim.o.whichwrap = cache_virtualedit, cache_whichwrap
 end
 
 -- Helper data ================================================================
@@ -1262,10 +1269,10 @@ H.expr_textobject = function(mode, ai_type, opts)
   -- Make expression
   return '<Cmd>lua '
     .. string.format(
-      [[MiniAi.select_textobject('%s', '%s', { search_method = '%s', n_times = %d, reference_region = %s, operator_pending = %s, vis_mode = %s })]],
+      [[MiniAi.select_textobject('%s', %s, { search_method = %s, n_times = %d, reference_region = %s, operator_pending = %s, vis_mode = %s })]],
       ai_type,
-      vim.fn.escape(tobj_id, "'\\"),
-      opts.search_method,
+      vim.inspect(tobj_id),
+      vim.inspect(opts.search_method),
       vim.v.count1,
       reference_region_field,
       operator_pending_field,
@@ -1288,12 +1295,7 @@ H.expr_motion = function(side)
 
   -- Make expression for moving cursor
   return '<Cmd>lua '
-    .. string.format(
-      [[MiniAi.move_cursor('%s', 'a', '%s', { n_times = %d })]],
-      side,
-      vim.fn.escape(tobj_id, "'\\"),
-      vim.v.count1
-    )
+    .. string.format([[MiniAi.move_cursor('%s', 'a', %s, { n_times = %d })]], side, vim.inspect(tobj_id), vim.v.count1)
     .. '<CR>'
 end
 
